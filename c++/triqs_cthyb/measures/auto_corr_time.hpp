@@ -21,38 +21,33 @@
  ******************************************************************************/
 #pragma once
 
-#include <triqs/stat/accumulator.hpp>
+#include <triqs/stat/lin_binning.hpp>
 
 #include "../qmc_data.hpp"
+
+#include <tuple>
 
 namespace triqs_cthyb {
 
   /// Measurement auto-correlation time based on the partition function
   struct measure_auto_corr_time {
+    using acc_t = triqs::stat::lin_binning<std::complex<double>>;
 
     measure_auto_corr_time(qmc_data const &_data, double &_auto_corr_time) : data(_data), auto_corr_time(_auto_corr_time) {}
 
     void accumulate(mc_weight_t sign) {
-      log_accs[0] << sign;
-      log_accs[1] << data.config.size();
+      sign_acc << sign;
+      order_acc << data.config.size();
     }
 
     void collect_results(mpi::communicator const &comm) {
+      double sign_tau = 0.0;
+      std::tie(std::ignore, std::ignore, sign_tau) = sign_acc.mean_error_and_tau(comm);
 
-      auto_corr_time = 0.0;
+      double order_tau = 0.0;
+      std::tie(std::ignore, std::ignore, order_tau) = order_acc.mean_error_and_tau(comm);
 
-      for (auto &log_acc : log_accs) {
-        auto [errs, counts] = log_acc.log_bin_errors_all_reduce(comm);
-
-        // Estimate auto-correlation time
-        if (comm.rank() == 0 && errs[0] > 0) {
-          auto_corr_time = std::max(auto_corr_time, tau_estimate_from_errors(errs[int(0.7 * errs.size())], errs[0]));
-        }
-
-        // Reset the accumulator
-        log_acc = {0.0, -1, 0};
-      }
-      mpi::broadcast(auto_corr_time, comm, 0);
+      auto_corr_time = std::max(sign_tau, order_tau);
     }
 
     private:
@@ -60,7 +55,8 @@ namespace triqs_cthyb {
     double &auto_corr_time;
 
     // Initialize one complex log accumulator for each observable to use for the autocorrelation analysis
-    std::vector<accumulator<dcomplex>> log_accs = {2, {0.0, -1, 0}};
+    acc_t sign_acc{1.0, 256, 1};
+    acc_t order_acc{1.0, 256, 1};
   };
 
 } // namespace triqs_cthyb
